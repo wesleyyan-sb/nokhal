@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"nokhal/internal/database"
+	"github.com/wesleyyan-sb/nokhal"
 )
 
 func main() {
@@ -28,7 +28,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	db, err := database.Open(*path, *password)
+	db, err := nokhal.Open(*path, *password)
 	if err != nil {
 		fmt.Printf("Error opening database: %v\n", err)
 		os.Exit(1)

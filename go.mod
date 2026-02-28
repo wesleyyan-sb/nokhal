@@ -1,4 +1,4 @@
-module github.com/wesleyyan-sb/Nokhal
+module github.com/wesleyyan-sb/nokhal
 
 go 1.25.2
 

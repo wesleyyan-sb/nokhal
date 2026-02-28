@@ -1,6 +1,11 @@
 <p align="center">
 <img src="logo.png" width="400">
 </p>
+<h1 align="center">Nokhal</h1>
+
+<p align="center">
+  Simple • Fast • Secure
+</p>
 
 **Nokhal** is an embedded database for Go focused on **API simplicity** and **robust internal architecture**.
 No SQL, no complex setup — just a single `.nok` file that is secure, fast, and easy to use.

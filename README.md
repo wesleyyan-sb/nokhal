@@ -33,7 +33,7 @@ package main
 
 import (
     "fmt"
-    "github.com/wesleyyan-sb/Nokhal"
+    "github.com/wesleyyan-sb/nokhal"
 )
 
 type User struct {

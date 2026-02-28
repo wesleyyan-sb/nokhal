@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nokhal | Secure Key-Value Store for Go</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;700;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <script src="gsap.min.js"></script>
+    <script src="ScrollTrigger.min.js"></script>
+    <style>
+        :root {
+            --bg: #050505;
+            --surface: #0f0f0f;
+            --primary: #00f2ff;
+            --secondary: #7000ff;
+            --text: #e0e0e0;
+            --text-dim: #888;
+            --accent-glow: rgba(0, 242, 255, 0.06);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+.reveal,
+.reveal-sub,
+.reveal-btn,
+.feature-card,
+.code-section {
+    opacity: 1;
+    transform: none;
+}
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            overflow-x: hidden;
+            line-height: 1.6;
+        }
+
+        #canvas-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+            opacity: 0.4;
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 0 2rem;
+        }
+
+        /* Nav */
+        nav {
+            padding: 2rem 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: fixed;
+            width: 100%;
+            top: 0;
+            z-index: 100;
+            background: rgba(5, 5, 5, 0.8);
+            backdrop-filter: blur(10px);
+        }
+
+        .logo {
+            font-weight: 900;
+            font-size: 1.5rem;
+            letter-spacing: -1px;
+            background: -gradient(90deg, var(--primary), var(--secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .nav-links a {
+            color: var(--text);
+            text-decoration: none;
+            margin-left: 2rem;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: color 0.3s;
+        }
+
+        .nav-links a:hover {
+            color: var(--primary);
+        }
+
+        /* Hero */
+        section {
+    padding: 120px 0;
+    display: block;
+}
+
+        .hero {
+            text-align: center;
+            flex-direction: column;
+            justify-content: center;
+            padding-top: 180px;
+        }
+
+        .hero h1 {
+            font-size: clamp(3rem, 10vw, 6rem);
+            font-weight: 900;
+            line-height: 0.9;
+            margin-bottom: 1.5rem;
+            letter-spacing: -3px;
+        }
+
+        .hero p {
+            font-size: 1.25rem;
+            color: var(--text-dim);
+            max-width: 600px;
+            margin: 0 auto 2.5rem;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+        }
+.feature-card {
+    position: relative;
+    z-index: 3;
+}
+        .btn {
+            padding: 1rem 2.5rem;
+            border-radius: 4px;
+            font-weight: 700;
+            text-decoration: none;
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: #000;
+            box-shadow: 0 0 20px var(--accent-glow);
+        }
+
+        .btn-primary:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 40px var(--primary);
+        }
+
+        .btn-secondary {
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: var(--text);
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.3);
+        }
+
+        /* Features */
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            margin-top: 4rem;
+        }
+
+        .feature-card {
+            background: var(--surface);
+            padding: 2.5rem;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            transition: all 0.4s;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .feature-card:hover {
+            border-color: var(--primary);
+            transform: translateY(-10px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        .feature-card::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle at top right, var(--accent-glow), transparent 70%);
+            opacity: 0;
+            transition: opacity 0.4s;
+        }
+
+        .feature-card:hover::before {
+            opacity: 1;
+        }
+
+        .feature-card h3 {
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+            color: var(--primary);
+        }
+#cursor-glow {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background: radial-gradient(circle at 50% 50%, var(--accent-glow), transparent 400px);
+    transition: background 0.05s linear;
+}
+
+body > *:not(#canvas-container):not(#cursor-glow) {
+    position: relative;
+    z-index: 2;
+}
+        .feature-card p {
+            color: var(--text-dim);
+        }
+
+        /* Code Block */
+        .code-section {
+            background: #000;
+            border-radius: 16px;
+            padding: 2rem;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
+            position: relative;
+        }
+
+        .code-header {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 1.5rem;
+        }
+
+        .dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #333;
+        }
+
+        pre {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.95rem;
+            color: #a9b7c6;
+            overflow-x: auto;
+            line-height: 1.5;
+        }
+
+        .keyword { color: #cc7832; }
+        .string { color: #6a8759; }
+        .comment { color: #808080; }
+        .func { color: #ffc66d; }
+
+        /* Floating Animation */
+        .floating {
+            animation: float 6s ease-in-out infinite;
+        }
+
+        @keyframes float {
+            0% { transform: translateY(0px); }
+            50% { transform: translateY(-20px); }
+            100% { transform: translateY(0px); }
+        }
+
+        footer {
+            padding: 4rem 0;
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 0.9rem;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero h1 { font-size: 3.5rem; }
+            .btn-group { flex-direction: column; }
+            .nav-links { display: none; }
+        }
+    </style>
+</head>
+<body>
+
+    <nav>
+        <div class="container" style="display:flex; justify-content:space-between; width:100%; align-items:center;">
+            <div class="logo" style="align-items:left;text-align: left;"><img src="https://raw.githubusercontent.com/wesleyyan-sb/nokhal/refs/heads/main/logo.png" alt="" width="100"></div>
+            <div class="nav-links">
+                <a href="#features">Features</a>
+                <a href="#code">Code</a>
+                <a href="https://github.com/wesleyyan-sb/nokhal">GitHub</a>
+            </div>
+        </div>
+    </nav>
+
+    <div id="canvas-container">
+        <canvas id="stars"></canvas>
+    </div>
+<div id="cursor-glow"></div>
+    <section class="hero">
+        <div class="container">
+            <h1 class="reveal">SECURE BY<br><span style="color:var(--primary)">DEFAULT</span>.</h1>
+            <p class="reveal-sub">A minimalist, high-performance, and encrypted key-value storage engine for Go applications.</p>
+            <div class="btn-group reveal-btn">
+                <a href="https://github.com/wesleyyan-sb/nokhal" class="btn btn-primary">Get Started</a>
+                <a href="#code" class="btn btn-secondary">View Example</a>
+            </div>
+        </div>
+    </section>
+
+<section id="about">
+    <div class="container" style="flex-direction:column; text-align:center;">
+        <h2 style="font-size: 2.5rem; margin-bottom: 2rem;">
+            BUILT FOR <span style="color:var(--primary)">CONTROL</span>
+        </h2>
+        <p style="max-width: 700px; margin: 0 auto; color: var(--text-dim); font-size:1.1rem;">
+            Nokhal is not just another database. It is a privacy-first storage engine designed to run locally,
+            giving developers full ownership of their data. No cloud, no tracking, no hidden layers.
+            Everything is encrypted, fast, and under your control.
+        </p>
+    </div>
+</section>
+    <section id="features">
+        <div class="container">
+            <h2 style="font-size: 2.5rem; margin-bottom: 3rem; text-align: center;">POWERED BY <span style="color:var(--secondary)">TITANIUM</span></h2>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <h3>AES-256-GCM</h3>
+                    <p>Military-grade encryption at rest. Every byte is sealed with authenticated encryption to ensure privacy and integrity.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>Argon2id</h3>
+                    <p>Modern key derivation that resists GPU-based brute force attacks. Your passwords are the master key to your fortress.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>Log-Structured</h3>
+                    <p>Append-only architecture designed for extreme write performance and crash consistency. Data is never lost.</p>
+                </div>
+                <div class="feature-card">
+                    <h3>Auto-Compaction</h3>
+                    <p>Intelligent background cleanup that reclaims space while maintaining database health without downtime.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+<!-- NOVA SEÇÃO: USE CASES -->
+<section id="use-cases">
+    <div class="container">
+        <h2 style="font-size: 2.5rem; margin-bottom: 3rem; text-align: center;">
+            REAL WORLD <span style="color:var(--secondary)">USE CASES</span>
+        </h2>
+
+        <div class="features-grid">
+            <div class="feature-card">
+                <h3>Secrets Storage</h3>
+                <p>Store API keys, tokens, and credentials securely with encryption by default.</p>
+            </div>
+
+            <div class="feature-card">
+                <h3>Local Databases</h3>
+                <p>Perfect for desktop apps and CLIs that need fast and persistent storage.</p>
+            </div>
+
+            <div class="feature-card">
+                <h3>Offline-First Apps</h3>
+                <p>Run your application without relying on external infrastructure or network access.</p>
+            </div>
+
+            <div class="feature-card">
+                <h3>Secure Caching</h3>
+                <p>Cache sensitive data locally without exposing it in plain text.</p>
+            </div>
+        </div>
+    </div>
+</section>
+    <section id="code">
+        <div class="container">
+            <div class="code-section floating">
+                <div class="code-header">
+                    <div class="dot" style="background:#ff5f56"></div>
+                    <div class="dot" style="background:#ffbd2e"></div>
+                    <div class="dot" style="background:#27c93f"></div>
+                    <span style="margin-left: 10px; font-size: 0.8rem; color: #555;">main.go</span>
+                </div>
+                <pre>
+<span class="keyword">package</span> main
+
+<span class="keyword">import</span> <span class="string">"github.com/wesleyyan-sb/nokhal"</span>
+
+<span class="keyword">func</span> <span class="func">main</span>() {
+    <span class="comment">// Create an encrypted fortress</span>
+    db, _ := nokhal.<span class="func">Open</span>(<span class="string">"vault.nok"</span>, <span class="string">"ultra-secret-pass"</span>)
+    <span class="keyword">defer</span> db.<span class="func">Close</span>()
+
+    <span class="comment">// Store data in seconds</span>
+    db.<span class="func">Put</span>(<span class="string">"secrets"</span>, <span class="string">"api_key"</span>, []<span class="keyword">byte</span>(<span class="string">"sk_live_12345"</span>))
+
+    <span class="comment">// Retrieve with speed</span>
+    val, _ := db.<span class="func">Get</span>(<span class="string">"secrets"</span>, <span class="string">"api_key"</span>)
+    <span class="func">println</span>(<span class="keyword">string</span>(val))
+}</pre>
+            </div>
+        </div>
+    </section>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2026 Nokhal Project. Built for the privacy-first web.</p>
+        </div>
+    </footer>
+
+    <script>
+        // Star Background
+        const canvas = document.getElementById('stars');
+        const ctx = canvas.getContext('2d');
+        let width, height, stars = [];
+
+        function initStars() {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width;
+            canvas.height = height;
+            stars = [];
+            for (let i = 0; i < 200; i++) {
+                stars.push({
+                    x: Math.random() * width,
+                    y: Math.random() * height,
+                    size: Math.random() * 2,
+                    speed: Math.random() * 0.5
+                });
+            }
+        }
+
+        function animateStars() {
+            ctx.clearRect(0, 0, width, height);
+            ctx.fillStyle = '#fff';
+            stars.forEach(star => {
+                ctx.beginPath();
+                ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
+                ctx.fill();
+                star.y -= star.speed;
+                if (star.y < 0) star.y = height;
+            });
+            requestAnimationFrame(animateStars);
+        }
+
+        window.addEventListener('resize', initStars);
+        initStars();
+        animateStars();
+
+        // GSAP Animations
+        gsap.registerPlugin(ScrollTrigger);
+
+        // Hero Animations
+gsap.from(".reveal", {
+    y: 100,
+    autoAlpha: 0,
+    duration: 1.2,
+    ease: "power4.out",
+    stagger: 0.2,
+    immediateRender: false
+});
+
+gsap.from(".reveal-sub", {
+    y: 50,
+    autoAlpha: 0,
+    duration: 1,
+    delay: 0.4,
+    ease: "power3.out",
+    immediateRender: false
+});
+
+gsap.from(".reveal-btn", {
+    y: 50,
+    autoAlpha: 0,
+    duration: 1,
+    delay: 0.6,
+    ease: "power3.out",
+    immediateRender: false
+});
+
+gsap.from(".feature-card", {
+    scrollTrigger: {
+        trigger: ".features-grid",
+        start: "top 80%",
+        toggleActions: "play none none none"
+    },
+    y: 60,
+    autoAlpha: 0,
+    duration: 0.8,
+    stagger: 0.2,
+    ease: "back.out(1.7)",
+    immediateRender: false
+});
+
+gsap.from(".code-section", {
+    scrollTrigger: {
+        trigger: ".code-section",
+        start: "top 85%",
+        toggleActions: "play none none none"
+    },
+    scale: 0.9,
+    autoAlpha: 0,
+    duration: 1,
+    ease: "power2.out",
+    immediateRender: false
+});
+
+        // Cursor Glow Effect
+        const glow = document.getElementById('cursor-glow');
+
+document.addEventListener('mousemove', (e) => {
+    const x = e.clientX;
+    const y = e.clientY;
+    glow.style.background =
+        `radial-gradient(circle at ${x}px ${y}px, var(--accent-glow), transparent 400px)`;
+});
+    </script>
+</body>
+</html>

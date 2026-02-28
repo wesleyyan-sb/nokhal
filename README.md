@@ -39,26 +39,19 @@ go get github.com/wesleyyan-sb/nokhal
 package main
 
 import (
-    "fmt"
+    "log"
     "github.com/wesleyyan-sb/nokhal"
 )
 
-type User struct {
-    Name string
-    Age  int
-}
-
 func main() {
-    db, _ := nokhal.Open("data.nok", nil)
+    db, err := nokhal.Open("data.nok", "password")
+    if err != nil { log.Fatal(err) }
+    defer db.Close()
 
-    user := User{Name: "Yan", Age: 17}
+    db.Put("users", "id", []byte("Yan"))
 
-    db.Put("user:1", user)
-
-    var result User
-    db.Get("user:1", &result)
-
-    fmt.Println(result.Name) // Yan
+    val, _ := db.Get("users", "id")
+    println(string(val))
 }
 ```
 

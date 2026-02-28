@@ -21,7 +21,7 @@ No SQL, no complex setup — just a single `.nok` file that is secure, fast, and
 ## 📦 Installation
 
 ```bash
-go get github.com/wesleyyan-sb/Nokhal
+go get github.com/wesleyyan-sb/nokhal
 ```
 
 ---

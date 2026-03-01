@@ -1,6 +1,6 @@
 module github.com/wesleyyan-sb/nokhal
 
-go 1.25.2
+go 1.25
 
 require golang.org/x/crypto v0.48.0
 

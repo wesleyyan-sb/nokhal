@@ -9,6 +9,7 @@
 
 ⚡ A fast, simple and secure embedded key-value database for Go.
 No setup. No dependencies. Just store and retrieve data.
+
 **Nokhal** is an embedded database for Go focused on **API simplicity** and **robust internal architecture**.
 No SQL, no complex setup — just a single `.nok` file that is secure, fast, and easy to use.
 

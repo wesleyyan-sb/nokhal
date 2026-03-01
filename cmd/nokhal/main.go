@@ -36,7 +36,7 @@ func main() {
 	defer db.Close()
 
 	fmt.Println("Nokhal DB Shell")
-	fmt.Println("Commands: put <col> <key> <val>, get <col> <key>, del <col> <key>, compact, exit")
+	fmt.Println("Commands: put <col> <key> <val>, get <col> <key>, del <col> <key>, list <col>, compact, exit")
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
@@ -89,6 +89,20 @@ func main() {
 				fmt.Printf("Error: %v\n", err)
 			} else {
 				fmt.Println("OK")
+			}
+		case "list":
+			if len(parts) != 2 {
+				fmt.Println("Usage: list <collection>")
+				continue
+			}
+			col := parts[1]
+			keys, err := db.List(col)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+			} else {
+				for _, k := range keys {
+					fmt.Println(k)
+				}
 			}
 		case "compact":
 			if err := db.Compact(); err != nil {

@@ -15,7 +15,7 @@ No SQL, no complex setup — just a single `.nok` file that is secure, fast, and
 
 ---
 
-# 📊 Project Stats
+## 📊 Project Stats
 
 | Metric | Value |
 |--------|-------|

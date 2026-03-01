@@ -2,11 +2,16 @@ package nokhal
 
 import (
 	"encoding/json"
+	"time"
+
 	"github.com/wesleyyan-sb/nokhal/internal/database"
 )
 
 // Record represents a decrypted database record.
 type Record = database.Record
+
+// Iterator iterates over keys in sorted order.
+type Iterator = database.Iterator
 
 // DB represents a Nokhal database instance.
 type DB struct {
@@ -25,6 +30,11 @@ func Open(path, password string) (*DB, error) {
 // Put adds a key-value pair to a collection.
 func (db *DB) Put(collection, key string, value []byte) error {
 	return db.inner.Put(collection, key, value)
+}
+
+// PutWithTTL adds a key-value pair with an expiration time.
+func (db *DB) PutWithTTL(collection, key string, value []byte, ttl time.Duration) error {
+	return db.inner.PutWithTTL(collection, key, value, ttl)
 }
 
 // Get retrieves a value from a collection by key.
@@ -50,6 +60,12 @@ func (db *DB) ScanPrefix(prefix string) ([]Record, error) {
 // FilterPrefix scans for records by prefix and returns decrypted values that satisfy the filter.
 func (db *DB) FilterPrefix(prefix string, fn func(key string, value []byte) bool) ([][]byte, error) {
 	return db.inner.FilterPrefix(prefix, fn)
+}
+
+// NewIterator creates a new iterator for the given prefix.
+// The iterator iterates over keys in lexicographical order.
+func (db *DB) NewIterator(prefix string) *Iterator {
+	return db.inner.NewIterator(prefix)
 }
 
 // PutJSON encodes v as JSON and stores it with the combined key (collection:key).

@@ -3,6 +3,7 @@ package database
 import (
 	"bufio"
 	"bytes"
+	"compress/flate"
 	"crypto/cipher"
 	"encoding/binary"
 	"errors"
@@ -14,6 +15,28 @@ import (
 	"sync"
 	"time"
 )
+
+// Compression helpers
+func compress(data []byte) ([]byte, error) {
+	var b bytes.Buffer
+	w, err := flate.NewWriter(&b, flate.BestSpeed)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := w.Write(data); err != nil {
+		return nil, err
+	}
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+func decompress(data []byte) ([]byte, error) {
+	r := flate.NewReader(bytes.NewReader(data))
+	defer r.Close()
+	return io.ReadAll(r)
+}
 
 var (
 	ErrNotFound         = errors.New("key not found")
@@ -37,6 +60,7 @@ type DB struct {
 	path   string
 	aead   cipher.AEAD
 	salt   []byte
+	bloom  *BloomFilter
 }
 
 func Open(path, password string) (*DB, error) {
@@ -168,6 +192,10 @@ func Open(path, password string) (*DB, error) {
 }
 
 func (db *DB) Put(collection, key string, value []byte) error {
+	return db.PutWithTTL(collection, key, value, 0)
+}
+
+func (db *DB) PutWithTTL(collection, key string, value []byte, ttl time.Duration) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -176,11 +204,30 @@ func (db *DB) Put(collection, key string, value []byte) error {
 		return err
 	}
 
+	flags := FlagNone
+	finalValue := value
+
+	// Compress if larger than 128 bytes
+	if len(value) > 128 {
+		compressed, err := compress(value)
+		if err == nil && len(compressed) < len(value) {
+			finalValue = compressed
+			flags |= FlagCompressed
+		}
+	}
+
 	aad := []byte(compositeKey(collection, key))
-	encryptedValue := db.aead.Seal(nil, nonce, value, aad)
+	encryptedValue := db.aead.Seal(nil, nonce, finalValue, aad)
+
+	var expiresAt int64
+	if ttl > 0 {
+		expiresAt = time.Now().Add(ttl).UnixNano()
+	}
 
 	rec := &record{
 		Timestamp:  time.Now().UnixNano(),
+		ExpiresAt:  expiresAt,
+		Flags:      flags,
 		Collection: []byte(collection),
 		Key:        []byte(key),
 		Value:      encryptedValue,
@@ -205,10 +252,24 @@ func (db *DB) Get(collection, key string) ([]byte, error) {
 		return nil, err
 	}
 
+	// Check Expiration
+	if rec.ExpiresAt > 0 && rec.ExpiresAt < time.Now().UnixNano() {
+		return nil, ErrNotFound
+	}
+
 	aad := []byte(compositeKey(collection, key))
 	plaintext, err := db.aead.Open(nil, rec.Nonce, rec.Value, aad)
 	if err != nil {
 		return nil, ErrDecryption
+	}
+
+	// Decompress if needed
+	if rec.Flags&FlagCompressed != 0 {
+		decompressed, err := decompress(plaintext)
+		if err != nil {
+			return nil, err
+		}
+		return decompressed, nil
 	}
 
 	return plaintext, nil
@@ -254,7 +315,7 @@ func (db *DB) ScanPrefix(prefix string) ([]Record, error) {
 			return nil, err
 		}
 
-		timestamp, collSize, keySize, valSize := decodeRecordHeader(header)
+		timestamp, expiresAt, flags, collSize, keySize, valSize := decodeRecordHeader(header)
 
 		dataSize := opSize + collSize + keySize + nonceSize + valSize
 		totalSize := recordHeaderSize + dataSize
@@ -302,6 +363,12 @@ func (db *DB) ScanPrefix(prefix string) ([]Record, error) {
 			continue
 		}
 
+		// Check Expiration
+		if expiresAt > 0 && expiresAt < time.Now().UnixNano() {
+			delete(results, fullKey) // Ensure expired key is removed if previously added
+			continue
+		}
+
 		nonce := dataBuf[dataOffset : dataOffset+nonceSize]
 		dataOffset += nonceSize
 		val := dataBuf[dataOffset : dataOffset+valSize]
@@ -320,11 +387,22 @@ func (db *DB) ScanPrefix(prefix string) ([]Record, error) {
 		}
 		decBuf = plaintext
 
-		valCopy := make([]byte, len(plaintext))
-		copy(valCopy, plaintext)
+		// Decompress if needed
+		finalVal := plaintext
+		if flags&FlagCompressed != 0 {
+			decompressed, err := decompress(plaintext)
+			if err != nil {
+				return nil, err
+			}
+			finalVal = decompressed
+		}
+
+		valCopy := make([]byte, len(finalVal))
+		copy(valCopy, finalVal)
 
 		results[fullKey] = Record{
 			Timestamp:  timestamp,
+			ExpiresAt:  expiresAt,
 			Collection: string(recColl),
 			Key:        string(recKey),
 			Value:      valCopy,
@@ -367,7 +445,7 @@ func (db *DB) FilterPrefix(prefix string, fn func(key string, value []byte) bool
 			return nil, err
 		}
 
-		_, collSize, keySize, valSize := decodeRecordHeader(header)
+		_, expiresAt, flags, collSize, keySize, valSize := decodeRecordHeader(header)
 
 		dataSize := opSize + collSize + keySize + nonceSize + valSize
 		totalSize := recordHeaderSize + dataSize
@@ -415,6 +493,12 @@ func (db *DB) FilterPrefix(prefix string, fn func(key string, value []byte) bool
 			continue
 		}
 
+		// Check Expiration
+		if expiresAt > 0 && expiresAt < time.Now().UnixNano() {
+			delete(results, fullKey)
+			continue
+		}
+
 		nonce := dataBuf[dataOffset : dataOffset+nonceSize]
 		dataOffset += nonceSize
 		val := dataBuf[dataOffset : dataOffset+valSize]
@@ -433,9 +517,19 @@ func (db *DB) FilterPrefix(prefix string, fn func(key string, value []byte) bool
 		}
 		decBuf = plaintext
 
-		if fn(fullKey, plaintext) {
-			valCopy := make([]byte, len(plaintext))
-			copy(valCopy, plaintext)
+		// Decompress if needed
+		finalVal := plaintext
+		if flags&FlagCompressed != 0 {
+			decompressed, err := decompress(plaintext)
+			if err != nil {
+				return nil, err
+			}
+			finalVal = decompressed
+		}
+
+		if fn(fullKey, finalVal) {
+			valCopy := make([]byte, len(finalVal))
+			copy(valCopy, finalVal)
 			results[fullKey] = valCopy
 		} else {
 			delete(results, fullKey)
@@ -478,7 +572,7 @@ func (db *DB) Filter(collection string, fn func(key string, value []byte) bool) 
 			return nil, err
 		}
 
-		_, collSize, keySize, valSize := decodeRecordHeader(header)
+		_, expiresAt, flags, collSize, keySize, valSize := decodeRecordHeader(header)
 
 		dataSize := opSize + collSize + keySize + nonceSize + valSize
 		totalSize := recordHeaderSize + dataSize
@@ -527,6 +621,12 @@ func (db *DB) Filter(collection string, fn func(key string, value []byte) bool) 
 			continue
 		}
 
+		// Check Expiration
+		if expiresAt > 0 && expiresAt < time.Now().UnixNano() {
+			delete(results, keyStr)
+			continue
+		}
+
 		nonce := dataBuf[dataOffset : dataOffset+nonceSize]
 		dataOffset += nonceSize
 		val := dataBuf[dataOffset : dataOffset+valSize]
@@ -545,10 +645,20 @@ func (db *DB) Filter(collection string, fn func(key string, value []byte) bool) 
 		}
 		decBuf = plaintext
 
+		// Decompress if needed
+		finalVal := plaintext
+		if flags&FlagCompressed != 0 {
+			decompressed, err := decompress(plaintext)
+			if err != nil {
+				return nil, err
+			}
+			finalVal = decompressed
+		}
+
 		// Apply filter
-		if fn(keyStr, plaintext) {
-			valCopy := make([]byte, len(plaintext))
-			copy(valCopy, plaintext)
+		if fn(keyStr, finalVal) {
+			valCopy := make([]byte, len(finalVal))
+			copy(valCopy, finalVal)
 			results[keyStr] = valCopy
 		} else {
 			delete(results, keyStr)
@@ -574,6 +684,8 @@ func (db *DB) Delete(collection, key string) error {
 
 	rec := &record{
 		Timestamp:  time.Now().UnixNano(),
+		ExpiresAt:  0,
+		Flags:      FlagNone,
 		Collection: []byte(collection),
 		Key:        []byte(key),
 		Value:      nil,
@@ -609,7 +721,7 @@ func (db *DB) readRecord(offset int64) (*record, int64, error) {
 		return nil, 0, err
 	}
 
-	timestamp, collSize, keySize, valSize := decodeRecordHeader(headerBuf)
+	timestamp, expiresAt, flags, collSize, keySize, valSize := decodeRecordHeader(headerBuf)
 
 	dataSize := opSize + collSize + keySize + nonceSize + valSize
 	totalSize := recordHeaderSize + dataSize
@@ -646,6 +758,8 @@ func (db *DB) readRecord(offset int64) (*record, int64, error) {
 
 	return &record{
 		Timestamp:  timestamp,
+		ExpiresAt:  expiresAt,
+		Flags:      flags,
 		Collection: coll,
 		Key:        key,
 		Value:      val,
@@ -687,9 +801,15 @@ func (db *DB) Compact() error {
 	newOffset := int64(fileHeaderSize)
 	newIndex := make(map[string]int64)
 
+	now := time.Now().UnixNano()
 	for keyStr, oldOffset := range db.index {
 		rec, _, err := db.readRecord(oldOffset)
 		if err != nil {
+			continue
+		}
+
+		// Skip expired records during compaction
+		if rec.ExpiresAt > 0 && rec.ExpiresAt < now {
 			continue
 		}
 
@@ -711,6 +831,9 @@ func (db *DB) Compact() error {
 	if err := os.Rename(tempPath, db.path); err != nil {
 		return err
 	}
+
+	// Remove hint file as offsets have changed
+	_ = os.Remove(db.path + ".hint")
 
 	db.file, err = os.OpenFile(db.path, os.O_APPEND|os.O_RDWR, 0644)
 	if err != nil {

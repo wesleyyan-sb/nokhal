@@ -144,7 +144,7 @@ Nokhal is designed for:
 ## 🛣️ Roadmap
 
 * [X] Persistent indexing
-* [ ] TTL (expiration)
+* [X] TTL (expiration)
 * [X] Snapshots
 * [X] Backup / Restore
 * [X] Full multi-process support

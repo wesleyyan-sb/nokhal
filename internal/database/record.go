@@ -7,7 +7,7 @@ import (
 
 const (
 	magicHeader = "NOKHAL"
-	version     = 3 // Updated to version 3 for TTL and Flags
+	version     = 4 // Updated to version 4 for Envelope Encryption
 
 	crcSize            = 4
 	timestampSize      = 8
@@ -18,16 +18,22 @@ const (
 	valueSizeSize      = 4
 	opSize             = 1
 
-	// V3 Header Size
+	// V3/V4 Record Header Size (Unchanged)
 	recordHeaderSize = crcSize + timestampSize + expiresAtSize + flagsSize + collectionSizeSize + keySizeSize + valueSizeSize
 
-	// Authentication constants
-	authMagic      = "NOKHAL_VALID" // 12 bytes
-	authNonceSize  = 12
-	authTagSize    = 16
-	authTokenSize  = authNonceSize + len(authMagic) + authTagSize // 12 + 12 + 16 = 40 bytes
+	// Authentication constants (Legacy V3)
+	authMagic     = "NOKHAL_VALID" // 12 bytes
+	authNonceSize = 12
+	authTagSize   = 16
+	authTokenSize = authNonceSize + len(authMagic) + authTagSize // 12 + 12 + 16 = 40 bytes
 
-	fileHeaderSize = len(magicHeader) + 1 + saltSize + authTokenSize
+	// Envelope Encryption (V4)
+	dekSize          = 32
+	encryptedDekSize = dekSize + authTagSize // 32 + 16 = 48
+	v4HeaderSize     = len(magicHeader) + 1 + saltSize + authNonceSize + encryptedDekSize
+	
+	// Legacy Header Sizes
+	v3HeaderSize = len(magicHeader) + 1 + saltSize + authTokenSize
 )
 
 const (

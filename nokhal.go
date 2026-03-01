@@ -13,6 +13,11 @@ type Record = database.Record
 // Iterator iterates over keys in sorted order.
 type Iterator = database.Iterator
 
+// Batch groups multiple operations into a single atomic write.
+type Batch struct {
+	inner *database.Batch
+}
+
 // DB represents a Nokhal database instance.
 type DB struct {
 	inner *database.DB
@@ -63,9 +68,28 @@ func (db *DB) FilterPrefix(prefix string, fn func(key string, value []byte) bool
 }
 
 // NewIterator creates a new iterator for the given prefix.
-// The iterator iterates over keys in lexicographical order.
 func (db *DB) NewIterator(prefix string) *Iterator {
 	return db.inner.NewIterator(prefix)
+}
+
+// NewBatch creates a new batch operation.
+func (db *DB) NewBatch() *Batch {
+	return &Batch{inner: db.inner.NewBatch()}
+}
+
+// Put adds a put operation to the batch.
+func (b *Batch) Put(collection, key string, value []byte, ttl time.Duration) {
+	b.inner.Put(collection, key, value, ttl)
+}
+
+// Delete adds a delete operation to the batch.
+func (b *Batch) Delete(collection, key string) {
+	b.inner.Delete(collection, key)
+}
+
+// Commit executes all operations in the batch atomically.
+func (b *Batch) Commit() error {
+	return b.inner.Commit()
 }
 
 // PutJSON encodes v as JSON and stores it with the combined key (collection:key).

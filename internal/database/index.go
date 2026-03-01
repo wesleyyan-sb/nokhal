@@ -63,7 +63,7 @@ func (db *DB) loadIndexes() error {
 		db.offset = loadedOffset
 	} else {
 		// If hint fails, start from beginning
-		db.offset = int64(fileHeaderSize)
+		db.offset = int64(v4HeaderSize)
 		db.index = make(map[string]int64)
 		db.bloom = NewBloomFilter(100000)
 	}

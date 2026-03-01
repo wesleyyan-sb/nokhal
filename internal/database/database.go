@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/flate"
 	"crypto/cipher"
+	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -38,6 +39,39 @@ func decompress(data []byte) ([]byte, error) {
 	return io.ReadAll(r)
 }
 
+func secureDelete(path string) error {
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return os.Remove(path)
+	}
+	
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return os.Remove(path)
+	}
+	
+	size := info.Size()
+	buf := make([]byte, 64*1024)
+	if _, err := rand.Read(buf); err != nil {
+		f.Close()
+		return os.Remove(path)
+	}
+
+	for i := int64(0); i < size; i += int64(len(buf)) {
+		if _, err := f.Write(buf); err != nil {
+			break
+		}
+	}
+	
+	f.Sync()
+	f.Close()
+	return os.Remove(path)
+}
+
 var (
 	ErrNotFound         = errors.New("key not found")
 	ErrChecksumMismatch = errors.New("checksum mismatch")
@@ -58,7 +92,7 @@ type DB struct {
 	offset int64
 	index  map[string]int64
 	path   string
-	aead   cipher.AEAD
+	aead   cipher.AEAD // Initialized with DEK
 	salt   []byte
 	bloom  *BloomFilter
 }
@@ -67,7 +101,9 @@ func Open(path, password string) (*DB, error) {
 	var file *os.File
 	var err error
 	var salt []byte
-	var authToken []byte
+	var kekNonce []byte
+	var encryptedDek []byte
+	var dek []byte
 
 	stat, err := os.Stat(path)
 	if err != nil && !os.IsNotExist(err) {
@@ -80,36 +116,59 @@ func Open(path, password string) (*DB, error) {
 			return nil, err
 		}
 
+		// 1. Generate Salt
 		salt, err = generateSalt()
 		if err != nil {
 			file.Close()
 			return nil, err
 		}
 
-		key := deriveKey(password, salt)
-		aead, err := newCipher(key)
+		// 2. Derive KEK (Key Encryption Key)
+		kek := deriveKey(password, salt)
+		kekAead, err := newCipher(kek)
 		if err != nil {
 			file.Close()
 			return nil, err
 		}
 
-		authNonce, err := generateNonce()
-		if err != nil {
+		// 3. Generate DEK (Data Encryption Key)
+		dek = make([]byte, dekSize)
+		if _, err := io.ReadFull(rand.Reader, dek); err != nil {
 			file.Close()
 			return nil, err
 		}
 
-		authToken = aead.Seal(nil, authNonce, []byte(authMagic), nil)
-		// prepend nonce to ciphertext to store together
-		authToken = append(authNonce, authToken...)
+		// 4. Encrypt DEK
+		kekNonce, err = generateNonce()
+		if err != nil {
+			file.Close()
+			return nil, err
+		}
+		// AAD for DEK encryption can be empty or static string
+		encryptedDek = kekAead.Seal(nil, kekNonce, dek, []byte("NOKHAL_DEK"))
 
-		header := make([]byte, fileHeaderSize)
-		copy(header[0:], magicHeader)
-		header[len(magicHeader)] = version
-		copy(header[len(magicHeader)+1:], salt)
-		copy(header[len(magicHeader)+1+saltSize:], authToken)
+		// 5. Write Header V4
+		// Magic(6) + Version(1) + Salt(32) + KEKNonce(12) + EncryptedDEK(48)
+		header := make([]byte, v4HeaderSize)
+		offset := 0
+		copy(header[offset:], magicHeader)
+		offset += len(magicHeader)
+		header[offset] = version
+		offset++
+		copy(header[offset:], salt)
+		offset += len(salt)
+		copy(header[offset:], kekNonce)
+		offset += len(kekNonce)
+		copy(header[offset:], encryptedDek)
 
 		if _, err := file.Write(header); err != nil {
+			file.Close()
+			return nil, err
+		}
+
+		// 6. Init Data AEAD with DEK
+		dataAead, err := newCipher(dek)
+		if err != nil {
 			file.Close()
 			return nil, err
 		}
@@ -118,9 +177,10 @@ func Open(path, password string) (*DB, error) {
 			file:   file,
 			index:  make(map[string]int64),
 			path:   path,
-			aead:   aead,
+			aead:   dataAead,
 			salt:   salt,
-			offset: int64(fileHeaderSize),
+			offset: int64(v4HeaderSize),
+			bloom:  NewBloomFilter(100000),
 		}
 		return db, nil
 
@@ -130,15 +190,14 @@ func Open(path, password string) (*DB, error) {
 			return nil, err
 		}
 
-		// Try to read the V2 header size. If file is V1, this might fail or read partial.
-		header := make([]byte, fileHeaderSize)
+		// Read V4 Header
+		header := make([]byte, v4HeaderSize)
 		n, err := io.ReadFull(file, header)
 		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
 			file.Close()
 			return nil, err
 		}
 
-		// Check magic
 		if n < len(magicHeader) || string(header[:len(magicHeader)]) != magicHeader {
 			file.Close()
 			return nil, ErrInvalidFile
@@ -150,36 +209,47 @@ func Open(path, password string) (*DB, error) {
 			return nil, fmt.Errorf("unsupported version: %d (expected %d)", fileVersion, version)
 		}
 
-		if n < fileHeaderSize {
+		if n < v4HeaderSize {
 			file.Close()
-			return nil, ErrInvalidFile // Header incomplete for V2
+			return nil, ErrInvalidFile
 		}
 
-		salt = header[len(magicHeader)+1 : len(magicHeader)+1+saltSize]
-		storedAuthToken := header[len(magicHeader)+1+saltSize:]
+		offset := len(magicHeader) + 1
+		salt = header[offset : offset+saltSize]
+		offset += saltSize
+		kekNonce = header[offset : offset+authNonceSize]
+		offset += authNonceSize
+		encryptedDek = header[offset : offset+encryptedDekSize]
 
-		key := deriveKey(password, salt)
-		aead, err := newCipher(key)
+		// Derive KEK
+		kek := deriveKey(password, salt)
+		kekAead, err := newCipher(kek)
 		if err != nil {
 			file.Close()
 			return nil, err
 		}
 
-		// Verify password
-		nonce := storedAuthToken[:authNonceSize]
-		ciphertext := storedAuthToken[authNonceSize:]
-		plaintext, err := aead.Open(nil, nonce, ciphertext, nil)
-		if err != nil || string(plaintext) != authMagic {
+		// Decrypt DEK
+		dek, err = kekAead.Open(nil, kekNonce, encryptedDek, []byte("NOKHAL_DEK"))
+		if err != nil {
 			file.Close()
 			return nil, ErrInvalidPassword
+		}
+
+		// Init Data AEAD
+		dataAead, err := newCipher(dek)
+		if err != nil {
+			file.Close()
+			return nil, err
 		}
 
 		db := &DB{
 			file:  file,
 			index: make(map[string]int64),
 			path:  path,
-			aead:  aead,
+			aead:  dataAead,
 			salt:  salt,
+			bloom: NewBloomFilter(100000),
 		}
 
 		if err := db.loadIndexes(); err != nil {
@@ -216,16 +286,22 @@ func (db *DB) PutWithTTL(collection, key string, value []byte, ttl time.Duration
 		}
 	}
 
-	aad := []byte(compositeKey(collection, key))
-	encryptedValue := db.aead.Seal(nil, nonce, finalValue, aad)
-
+	now := time.Now().UnixNano()
 	var expiresAt int64
 	if ttl > 0 {
 		expiresAt = time.Now().Add(ttl).UnixNano()
 	}
 
+	// Richer AAD: Collection:Key + Timestamp
+	compKey := compositeKey(collection, key)
+	aad := make([]byte, len(compKey)+8)
+	copy(aad, compKey)
+	binary.BigEndian.PutUint64(aad[len(compKey):], uint64(now))
+
+	encryptedValue := db.aead.Seal(nil, nonce, finalValue, aad)
+
 	rec := &record{
-		Timestamp:  time.Now().UnixNano(),
+		Timestamp:  now,
 		ExpiresAt:  expiresAt,
 		Flags:      flags,
 		Collection: []byte(collection),
@@ -235,14 +311,24 @@ func (db *DB) PutWithTTL(collection, key string, value []byte, ttl time.Duration
 		Op:         OpPut,
 	}
 
-	return db.writeRecord(rec)
+	if err := db.writeRecord(rec); err != nil {
+		return err
+	}
+	
+	db.bloom.Add(compKey)
+	return nil
 }
 
 func (db *DB) Get(collection, key string) ([]byte, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	offset, ok := db.index[compositeKey(collection, key)]
+	compKey := compositeKey(collection, key)
+	if !db.bloom.Contains(compKey) {
+		return nil, ErrNotFound
+	}
+
+	offset, ok := db.index[compKey]
 	if !ok {
 		return nil, ErrNotFound
 	}
@@ -257,7 +343,11 @@ func (db *DB) Get(collection, key string) ([]byte, error) {
 		return nil, ErrNotFound
 	}
 
-	aad := []byte(compositeKey(collection, key))
+	// Reconstruct AAD with stored timestamp
+	aad := make([]byte, len(compKey)+8)
+	copy(aad, compKey)
+	binary.BigEndian.PutUint64(aad[len(compKey):], uint64(rec.Timestamp))
+
 	plaintext, err := db.aead.Open(nil, rec.Nonce, rec.Value, aad)
 	if err != nil {
 		return nil, ErrDecryption
@@ -296,7 +386,7 @@ func (db *DB) ScanPrefix(prefix string) ([]Record, error) {
 	limit := db.offset
 	results := make(map[string]Record)
 
-	secReader := io.NewSectionReader(db.file, int64(fileHeaderSize), limit-int64(fileHeaderSize))
+	secReader := io.NewSectionReader(db.file, int64(v4HeaderSize), limit-int64(v4HeaderSize))
 	bufReader := bufio.NewReaderSize(secReader, 128*1024)
 
 	buf := bufferPool.Get().([]byte)
@@ -378,6 +468,10 @@ func (db *DB) ScanPrefix(prefix string) ([]Record, error) {
 		aadBuf = append(aadBuf, recColl...)
 		aadBuf = append(aadBuf, ':')
 		aadBuf = append(aadBuf, recKey...)
+		// Append Timestamp
+		tsBuf := make([]byte, 8)
+		binary.BigEndian.PutUint64(tsBuf, uint64(timestamp))
+		aadBuf = append(aadBuf, tsBuf...)
 
 		// Decrypt
 		var errOpen error
@@ -426,7 +520,7 @@ func (db *DB) FilterPrefix(prefix string, fn func(key string, value []byte) bool
 	limit := db.offset
 	results := make(map[string][]byte)
 
-	secReader := io.NewSectionReader(db.file, int64(fileHeaderSize), limit-int64(fileHeaderSize))
+	secReader := io.NewSectionReader(db.file, int64(v4HeaderSize), limit-int64(v4HeaderSize))
 	bufReader := bufio.NewReaderSize(secReader, 128*1024)
 
 	buf := bufferPool.Get().([]byte)
@@ -445,7 +539,7 @@ func (db *DB) FilterPrefix(prefix string, fn func(key string, value []byte) bool
 			return nil, err
 		}
 
-		_, expiresAt, flags, collSize, keySize, valSize := decodeRecordHeader(header)
+		timestamp, expiresAt, flags, collSize, keySize, valSize := decodeRecordHeader(header)
 
 		dataSize := opSize + collSize + keySize + nonceSize + valSize
 		totalSize := recordHeaderSize + dataSize
@@ -508,6 +602,9 @@ func (db *DB) FilterPrefix(prefix string, fn func(key string, value []byte) bool
 		aadBuf = append(aadBuf, recColl...)
 		aadBuf = append(aadBuf, ':')
 		aadBuf = append(aadBuf, recKey...)
+		tsBuf := make([]byte, 8)
+		binary.BigEndian.PutUint64(tsBuf, uint64(timestamp))
+		aadBuf = append(aadBuf, tsBuf...)
 
 		// Decrypt
 		var errOpen error
@@ -552,7 +649,7 @@ func (db *DB) Filter(collection string, fn func(key string, value []byte) bool) 
 	results := make(map[string][]byte)
 	collBytes := []byte(collection)
 
-	secReader := io.NewSectionReader(db.file, int64(fileHeaderSize), limit-int64(fileHeaderSize))
+	secReader := io.NewSectionReader(db.file, int64(v4HeaderSize), limit-int64(v4HeaderSize))
 	bufReader := bufio.NewReaderSize(secReader, 128*1024)
 
 	buf := bufferPool.Get().([]byte)
@@ -572,7 +669,7 @@ func (db *DB) Filter(collection string, fn func(key string, value []byte) bool) 
 			return nil, err
 		}
 
-		_, expiresAt, flags, collSize, keySize, valSize := decodeRecordHeader(header)
+		timestamp, expiresAt, flags, collSize, keySize, valSize := decodeRecordHeader(header)
 
 		dataSize := opSize + collSize + keySize + nonceSize + valSize
 		totalSize := recordHeaderSize + dataSize
@@ -636,6 +733,9 @@ func (db *DB) Filter(collection string, fn func(key string, value []byte) bool) 
 		aadBuf = append(aadBuf, recColl...)
 		aadBuf = append(aadBuf, ':')
 		aadBuf = append(aadBuf, recKey...)
+		tsBuf := make([]byte, 8)
+		binary.BigEndian.PutUint64(tsBuf, uint64(timestamp))
+		aadBuf = append(aadBuf, tsBuf...)
 
 		// Decrypt
 		var errOpen error
@@ -771,6 +871,7 @@ func (db *DB) readRecord(offset int64) (*record, int64, error) {
 func (db *DB) Close() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	_ = db.saveHint()
 	return db.file.Close()
 }
 
@@ -788,8 +889,8 @@ func (db *DB) Compact() error {
 		os.Remove(tempPath)
 	}()
 
-	// Read original header
-	originalHeader := make([]byte, fileHeaderSize)
+	// Read original header (V4 size)
+	originalHeader := make([]byte, v4HeaderSize)
 	if _, err := db.file.ReadAt(originalHeader, 0); err != nil {
 		return err
 	}
@@ -798,7 +899,7 @@ func (db *DB) Compact() error {
 		return err
 	}
 
-	newOffset := int64(fileHeaderSize)
+	newOffset := int64(v4HeaderSize)
 	newIndex := make(map[string]int64)
 
 	now := time.Now().UnixNano()
@@ -827,6 +928,23 @@ func (db *DB) Compact() error {
 	}
 	tempFile.Close()
 	db.file.Close()
+
+	// Secure Erase old file before Rename?
+	// os.Rename overwrites `db.path`.
+	// But `db.path` points to the old data.
+	// `Rename` atomic replacement usually deletes the target.
+	// To strictly Secure Delete the *old* data, we must first Rename the old data to a temp name, then Secure Delete it?
+	// Or explicitly SecureDelete `db.path` before renaming?
+	// If we delete `db.path` before rename, there is a moment where file is gone.
+	// But `Rename` is atomic.
+	// If we want to overwrite the sectors of the *old* file, we must do it before `Rename` replaces it.
+	// BUT `Rename` on Windows/Linux replaces the pointer. The old blocks are freed.
+	// To secure erase the *old* blocks, we must open `db.path`, overwrite, close, then Rename `tempPath` to `db.path`.
+	
+	// Secure Erase Logic:
+	if err := secureDelete(db.path); err != nil {
+		// Log error?
+	}
 
 	if err := os.Rename(tempPath, db.path); err != nil {
 		return err

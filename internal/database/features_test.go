@@ -148,3 +148,39 @@ func TestIndexHint(t *testing.T) {
 		t.Error("Failed to add new data after hint load")
 	}
 }
+
+func TestBatch(t *testing.T) {
+	path, cleanup := tempFile()
+	defer cleanup()
+
+	db, err := Open(path, "pass")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	batch := db.NewBatch()
+	batch.Put("col", "k1", []byte("v1"), 0)
+	batch.Put("col", "k2", []byte("v2"), 0)
+	batch.Delete("col", "k1")
+
+	// Verify not written yet
+	if _, err := db.Get("col", "k2"); err != ErrNotFound {
+		t.Error("Batch writes should not be visible before commit")
+	}
+
+	if err := batch.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify k2 exists
+	val, err := db.Get("col", "k2")
+	if err != nil || string(val) != "v2" {
+		t.Errorf("Batch put failed")
+	}
+
+	// Verify k1 deleted (actually never existed in main index, but logic handles OpDelete)
+	if _, err := db.Get("col", "k1"); err != ErrNotFound {
+		t.Errorf("Batch delete failed")
+	}
+}

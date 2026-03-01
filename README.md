@@ -15,6 +15,17 @@ No SQL, no complex setup — just a single `.nok` file that is secure, fast, and
 
 ---
 
+# 📊 Project Stats
+
+| Metric | Value |
+|--------|-------|
+| 🧾 Lines of Code | **2498** |
+| 📂 Files (.go) | **12** |
+| 🔤 Extensions | `.go` |
+| 📅 Last Scan | 2026-03-01 |
+
+---
+
 ## 🚀 Features
 
 * ⚡ **High performance** with append-only (WAL) writes
